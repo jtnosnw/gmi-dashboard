@@ -954,7 +954,14 @@ async function signInWithGoogle(){
   }catch(err){
     btn.disabled=false;
     btn.innerHTML=GOOGLE_BTN_HTML;
-    setAuthError('Sign-in failed: ' + err.message);
+    const friendly={
+      'auth/too-many-requests':          'Too many sign-in attempts. Please try again later.',
+      'auth/quota-exceeded':             'Sign-ups are temporarily at capacity. Please contact the administrator.',
+      'auth/admin-restricted-operation': 'New sign-ups are temporarily paused. Please contact the administrator.',
+      'auth/unauthorized-domain':        'This domain is not authorised. Please access the dashboard from the correct URL.',
+      'auth/network-request-failed':     'Network error. Please check your connection and try again.',
+    };
+    setAuthError(friendly[err.code] || 'Sign-in failed. Please try again.');
   }
 }
 
@@ -966,7 +973,14 @@ auth.getRedirectResult().then(result=>{
   }
 }).catch(err=>{
   if(err.code && err.code !== 'auth/no-current-user'){
-    setAuthError('Sign-in failed: ' + err.message);
+    const friendly={
+      'auth/too-many-requests':     'Too many sign-in attempts. Please try again later.',
+      'auth/quota-exceeded':        'Sign-ups are temporarily at capacity. Please contact the administrator.',
+      'auth/admin-restricted-operation': 'New sign-ups are temporarily paused. Please contact the administrator.',
+      'auth/unauthorized-domain':   'This domain is not authorised. Please access the dashboard from the correct URL.',
+      'auth/network-request-failed':'Network error. Please check your connection and try again.',
+    };
+    setAuthError(friendly[err.code] || 'Sign-in failed: ' + err.message);
   }
 });
 
