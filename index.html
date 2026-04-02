@@ -10,8 +10,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<!-- EmailJS SDK -->
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
 :root{
   --bg-base:#080c10;--bg-card:#0d1117;--bg-card2:#111820;--bg-tab:#161e28;
@@ -877,11 +875,10 @@ const auth      = firebase.auth();
 const db        = firebase.firestore();
 const provider  = new firebase.auth.GoogleAuthProvider();
 
-// EmailJS config
+// EmailJS config — called via fetch (no SDK needed, avoids tracker blocking)
 const EJS_SERVICE  = 'service_y15atsq';
 const EJS_TEMPLATE = 'template_9hlz00i';
 const EJS_KEY      = 'KAW98Xpmmzpe6H1wQ';
-emailjs.init(EJS_KEY);
 
 // ═══════════════════════════════════════════════════
 //  RUNTIME STATE
@@ -1094,23 +1091,34 @@ function renderUserBadge(user){
   badge.style.display='flex';
 }
 
-function sendAccessRequestEmail(user){
-  // Small delay to ensure EmailJS SDK is fully initialised
-  setTimeout(()=>{
-    try{
-      emailjs.send(EJS_SERVICE, EJS_TEMPLATE, {
+async function sendAccessRequestEmail(user){
+  // Uses the EmailJS REST API directly — no SDK, no CDN, not blockable as a tracker
+  try{
+    const payload = {
+      service_id:  EJS_SERVICE,
+      template_id: EJS_TEMPLATE,
+      user_id:     EJS_KEY,
+      template_params: {
         from_name:  user.displayName || 'Unknown User',
-        from_email: user.email       || 'No email',
+        from_email: user.email       || 'No email provided',
         user_id:    user.uid,
         time:       new Date().toLocaleString(),
-      }).then(
-        ()=>console.log('Access request email sent successfully'),
-        err=>console.error('EmailJS send failed:', JSON.stringify(err))
-      );
-    }catch(e){
-      console.error('EmailJS exception:', e);
+      }
+    };
+    const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload)
+    });
+    if(res.ok){
+      console.log('Access request email sent successfully');
+    } else {
+      const text = await res.text();
+      console.error('EmailJS API error:', res.status, text);
     }
-  }, 1000);
+  } catch(e){
+    console.error('EmailJS fetch exception:', e);
+  }
 }
 
 // ═══════════════════════════════════════════════════
