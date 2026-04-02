@@ -858,6 +858,12 @@ table.fx-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',
 
 <script>
 // ═══════════════════════════════════════════════════
+//  ENVIRONMENT — staging bypass (hostname-keyed, safe to merge)
+// ═══════════════════════════════════════════════════
+const IS_STAGING = window.location.hostname === 'yourusername.github.io'
+                && window.location.pathname.includes('/your-repo-staging/');
+
+// ═══════════════════════════════════════════════════
 //  FIREBASE CONFIGURATION
 // ═══════════════════════════════════════════════════
 const firebaseConfig = {
@@ -989,6 +995,25 @@ async function signOut(){
 
 // Called every time auth state changes (page load, sign-in, sign-out)
 auth.onAuthStateChanged(async user => {
+  
+  // ── Staging bypass — skips auth gate on staging repo URL ──
+  if (IS_STAGING) {
+    hideOverlay();
+    const fakeUser = { displayName: 'Dev User', photoURL: null, email: 'dev@staging.local', uid: 'staging-dev' };
+    await loadStateFromFirestore('staging-dev').catch(()=>{});
+    _stateReady = true;
+    initTheme('dark');
+    ['ca','us','au'].forEach(c=>{ renderSymList(c); buildWidget(c); });
+    if (activeTab) switchTab(activeTab);
+    initFX();
+    initIdxWidget();
+    initMarketStatus();
+    buildStockHeatmap('SPX500');
+    buildEtfHeatmap('AllCAEtf');
+    setLastRefreshed();
+    return; // ← exits before any real auth logic runs
+  }
+  
   console.log('[GMI Auth] onAuthStateChanged fired. User:', user ? user.email : 'null');
   if(!user){
     showOverlay();
