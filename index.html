@@ -964,18 +964,21 @@ async function signInWithGoogle(){
 
 // Handle the redirect result when page reloads after Google sign-in
 auth.getRedirectResult().then(result=>{
+  console.log('[GMI Auth] getRedirectResult fired. Has user:', !!(result && result.user));
   if(result && result.user){
+    console.log('[GMI Auth] Redirect sign-in completed for:', result.user.email);
     const btn=el('auth-google-btn');
     if(btn){ btn.disabled=true; btn.innerHTML='Signing you in…'; }
   }
 }).catch(err=>{
+  console.error('[GMI Auth] getRedirectResult error:', err.code, err.message);
   if(err.code && err.code !== 'auth/no-current-user'){
     const friendly={
-      'auth/too-many-requests':     'Too many sign-in attempts. Please try again later.',
-      'auth/quota-exceeded':        'Sign-ups are temporarily at capacity. Please contact the administrator.',
+      'auth/too-many-requests':          'Too many sign-in attempts. Please try again later.',
+      'auth/quota-exceeded':             'Sign-ups are temporarily at capacity. Please contact the administrator.',
       'auth/admin-restricted-operation': 'New sign-ups are temporarily paused. Please contact the administrator.',
-      'auth/unauthorized-domain':   'This domain is not authorised. Please access the dashboard from the correct URL.',
-      'auth/network-request-failed':'Network error. Please check your connection and try again.',
+      'auth/unauthorized-domain':        'This domain is not authorised. Please access the dashboard from the correct URL.',
+      'auth/network-request-failed':     'Network error. Please check your connection and try again.',
     };
     setAuthError(friendly[err.code] || 'Sign-in failed: ' + err.message);
   }
@@ -992,6 +995,7 @@ async function signOut(){
 
 // Called every time auth state changes (page load, sign-in, sign-out)
 auth.onAuthStateChanged(async user => {
+  console.log('[GMI Auth] onAuthStateChanged fired. User:', user ? user.email : 'null');
   if(!user){
     showOverlay();
     showSigninPanel();
@@ -1002,30 +1006,50 @@ auth.onAuthStateChanged(async user => {
   }
 
   _currentUser = user;
+  console.log('[GMI Auth] User UID:', user.uid);
 
   // Check / create user document in Firestore
+  console.log('[GMI Auth] Checking Firestore for user document…');
+  let snap;
+  try{
+    const userRef = db.collection('users').doc(user.uid);
+    snap = await userRef.get();
+    console.log('[GMI Auth] Firestore doc exists:', snap.exists);
+  }catch(err){
+    console.error('[GMI Auth] Firestore read error:', err.code, err.message);
+    setAuthError('Database error: ' + err.message);
+    return;
+  }
+
   const userRef = db.collection('users').doc(user.uid);
-  const snap    = await userRef.get();
 
   if(!snap.exists){
-    // First-ever sign-in — create pending document
-    await userRef.set({
-      uid:          user.uid,
-      email:        user.email,
-      displayName:  user.displayName || '',
-      photoURL:     user.photoURL    || '',
-      approved:     false,
-      createdAt:    firebase.firestore.FieldValue.serverTimestamp(),
-      lastSeen:     firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    // Notify admin via EmailJS
-    sendAccessRequestEmail(user);
+    console.log('[GMI Auth] New user — creating Firestore document…');
+    try{
+      await userRef.set({
+        uid:          user.uid,
+        email:        user.email,
+        displayName:  user.displayName || '',
+        photoURL:     user.photoURL    || '',
+        approved:     false,
+        createdAt:    firebase.firestore.FieldValue.serverTimestamp(),
+        lastSeen:     firebase.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log('[GMI Auth] Firestore document created successfully');
+    }catch(err){
+      console.error('[GMI Auth] Firestore write error:', err.code, err.message);
+      setAuthError('Could not save your account: ' + err.message);
+      return;
+    }
+    console.log('[GMI Auth] Sending access request email…');
+    await sendAccessRequestEmail(user);
     showOverlay();
     showPendingPanel(user.email);
     return;
   }
 
   const data = snap.data();
+  console.log('[GMI Auth] User approved status:', data.approved);
 
   // Update lastSeen
   userRef.update({ lastSeen: firebase.firestore.FieldValue.serverTimestamp() });
