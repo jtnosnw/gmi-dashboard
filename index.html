@@ -1039,6 +1039,8 @@ auth.onAuthStateChanged(async user => {
     await sendAccessRequestEmail(user);
     showOverlay();
     showPendingPanel(user.email);
+    // Start polling for approval — same as returning user branch
+    startApprovalPolling(user, userRef);
     return;
   }
 
@@ -1051,20 +1053,29 @@ auth.onAuthStateChanged(async user => {
   if(!data.approved){
     showOverlay();
     showPendingPanel(user.email);
-    // Poll every 15 s in case admin approves while page is open
-    const pollInterval = setInterval(async()=>{
-      const fresh = await userRef.get();
-      if(fresh.data()?.approved){
-        clearInterval(pollInterval);
-        onUserApproved(user, fresh.data());
-      }
-    }, 15000);
+    startApprovalPolling(user, userRef);
     return;
   }
 
   // User is approved — load their data and show dashboard
   onUserApproved(user, data);
 });
+
+function startApprovalPolling(user, userRef){
+  console.log('[GMI Auth] Starting approval polling…');
+  const pollInterval = setInterval(async()=>{
+    try{
+      const fresh = await userRef.get();
+      console.log('[GMI Auth] Poll check — approved:', fresh.data()?.approved);
+      if(fresh.data()?.approved){
+        clearInterval(pollInterval);
+        onUserApproved(user, fresh.data());
+      }
+    }catch(e){
+      console.warn('[GMI Auth] Poll error:', e);
+    }
+  }, 5000); // check every 5 seconds
+}
 
 async function onUserApproved(user, data){
   hideOverlay();
