@@ -1095,14 +1095,22 @@ function renderUserBadge(user){
 }
 
 function sendAccessRequestEmail(user){
-  try{
-    emailjs.send(EJS_SERVICE, EJS_TEMPLATE, {
-      from_name:  user.displayName || 'Unknown',
-      from_email: user.email,
-      user_id:    user.uid,
-      time:       new Date().toLocaleString(),
-    });
-  }catch(e){ console.warn('EmailJS failed:', e); }
+  // Small delay to ensure EmailJS SDK is fully initialised
+  setTimeout(()=>{
+    try{
+      emailjs.send(EJS_SERVICE, EJS_TEMPLATE, {
+        from_name:  user.displayName || 'Unknown User',
+        from_email: user.email       || 'No email',
+        user_id:    user.uid,
+        time:       new Date().toLocaleString(),
+      }).then(
+        ()=>console.log('Access request email sent successfully'),
+        err=>console.error('EmailJS send failed:', JSON.stringify(err))
+      );
+    }catch(e){
+      console.error('EmailJS exception:', e);
+    }
+  }, 1000);
 }
 
 // ═══════════════════════════════════════════════════
