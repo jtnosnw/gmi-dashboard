@@ -131,6 +131,31 @@ body.light-mode .theme-track::after{transform:translateX(16px);background:var(--
 @keyframes spin{to{transform:rotate(360deg)}}
 .tv-loading p{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);letter-spacing:.1em}
 
+/* RANGE TOOLBAR — sits between status bar and tv-frame inside chart-area */
+.range-toolbar{
+  display:flex;align-items:center;gap:4px;
+  padding:6px 10px;
+  background:var(--bg-card2);
+  border-bottom:1px solid var(--border);
+  flex-wrap:wrap;
+}
+.range-toolbar-label{
+  font-family:'JetBrains Mono',monospace;font-size:9px;
+  color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase;
+  margin-right:4px;flex-shrink:0;
+}
+.range-btn{
+  font-family:'JetBrains Mono',monospace;font-size:10px;
+  padding:3px 8px;border-radius:4px;
+  border:1px solid transparent;
+  background:transparent;color:var(--text-dim);
+  cursor:pointer;transition:all .15s;letter-spacing:.04em;
+}
+.range-btn:hover{color:var(--text-primary);background:rgba(255,255,255,.05);border-color:var(--border-bright);}
+.range-btn.active{
+  background:rgba(79,195,247,.12);border-color:rgba(79,195,247,.35);color:var(--accent-us);
+}
+
 /* Instructions panel shown before any symbol is selected */
 .tv-instructions{display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px 28px;max-width:360px;text-align:center}
 .tv-inst-icon{font-size:36px;line-height:1}
@@ -594,6 +619,7 @@ table.fx-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',
     <div class="mkt-status-bar" id="status-ca"></div>
     <div class="card-inner">
       <div class="chart-area">
+        <div class="range-toolbar" id="range-toolbar-ca"></div>
         <div class="tv-frame" id="tv-ca">
           <div class="tv-loading" id="loading-ca">
             <div class="tv-instructions">
@@ -628,6 +654,7 @@ table.fx-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',
     <div class="mkt-status-bar" id="status-us"></div>
     <div class="card-inner">
       <div class="chart-area">
+        <div class="range-toolbar" id="range-toolbar-us"></div>
         <div class="tv-frame" id="tv-us">
           <div class="tv-loading" id="loading-us">
             <div class="tv-instructions">
@@ -662,6 +689,7 @@ table.fx-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',
     <div class="mkt-status-bar" id="status-au"></div>
     <div class="card-inner">
       <div class="chart-area">
+        <div class="range-toolbar" id="range-toolbar-au"></div>
         <div class="tv-frame" id="tv-au">
           <div class="tv-loading" id="loading-au">
             <div class="tv-instructions">
@@ -1021,6 +1049,7 @@ function onStagingBypass(){
   // Boot everything with dark theme default
   initTheme('dark');
   initCurrencySelectors();
+  initRangeToolbars();
   ['ca','us','au'].forEach(c=>{ renderSymList(c); buildWidget(c); }); renderSymList('aio'); buildAioWidget();
   if(activeTab) switchTab(activeTab);
   initFX();
@@ -1202,6 +1231,7 @@ async function onUserApproved(user, data){
   // Re-render everything with restored state
   initTheme(data.theme || 'dark');
   initCurrencySelectors();
+  initRangeToolbars();
   ['ca','us','au'].forEach(c=>{ renderSymList(c); buildWidget(c); }); renderSymList('aio'); buildAioWidget();
   if(activeTab) switchTab(activeTab);
   initFX();
@@ -1451,27 +1481,6 @@ document.addEventListener('DOMContentLoaded', ()=>{
         if(wrap&&!wrap.contains(e.target)) d.classList.remove('open');
       }
     });
-  });
-
-  // Listen for TradingView Symbol Overview date-range change events.
-  // The widget posts a message when the user clicks a range button; we capture
-  // it to persist the selection so it is restored on next load.
-  window.addEventListener('message', e => {
-    try{
-      const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
-      // TradingView Symbol Overview emits {name:'widgetReady'|'setRange', data:{range, interval}}
-      if(data && data.name === 'setRange' && data.data){
-        const {range, interval} = data.data;
-        if(range && interval){
-          const key = `${range}|${interval}`;
-          const ALL_DATE_RANGES=['1d|1','5d|5','1w|15','1m|30','3m|60','6m|120','12m|1D','60m|1W','120m|1M','ytd|1D','all|1M'];
-          if(ALL_DATE_RANGES.includes(key) && key !== activeRange){
-            activeRange = key;
-            save();
-          }
-        }
-      }
-    }catch(_){}
   });
 
   // Staging environment — bypass Firebase auth and boot directly
@@ -2274,6 +2283,46 @@ function pickSym(e,c,tv){
 }
 
 // ═══════════════════════════════════════════════════
+//  RANGE SELECTOR TOOLBAR
+//  Renders labelled buttons above the Symbol Overview chart.
+//  Clicking a button updates activeRange, persists it, and
+//  rebuilds the widget with the new range in the symbol string.
+// ═══════════════════════════════════════════════════
+const RANGE_OPTIONS=[
+  {key:'1d|1',   label:'1D'},
+  {key:'5d|5',   label:'5D'},
+  {key:'1w|15',  label:'1W'},
+  {key:'1m|30',  label:'1M'},
+  {key:'3m|60',  label:'3M'},
+  {key:'6m|120', label:'6M'},
+  {key:'12m|1D', label:'1Y'},
+  {key:'ytd|1D', label:'YTD'},
+  {key:'all|1M', label:'ALL'},
+];
+
+function renderRangeToolbar(c){
+  const bar=el('range-toolbar-'+c);
+  if(!bar) return;
+  bar.innerHTML=`<span class="range-toolbar-label">Range</span>`
+    +RANGE_OPTIONS.map(o=>`
+      <button class="range-btn${o.key===activeRange?' active':''}"
+        onclick="setRange('${c}','${o.key}')">${o.label}</button>
+    `).join('');
+}
+
+function setRange(c, key){
+  activeRange=key;
+  // Re-render all toolbars so they all reflect the new active range
+  ['ca','us','au'].forEach(t=>renderRangeToolbar(t));
+  buildWidget(c);
+  save();
+}
+
+function initRangeToolbars(){
+  ['ca','us','au'].forEach(c=>renderRangeToolbar(c));
+}
+
+// ═══════════════════════════════════════════════════
 //  SYMBOL OVERVIEW WIDGET
 //  TradingView Symbol Overview — supports multi-symbol,
 //  currency conversion, and date range selection.
@@ -2858,9 +2907,11 @@ const FX_CAT=[
   {id:'USDSGD', label:'USD/SGD', flags:'🇺🇸🇸🇬', tv:'FX_IDC:USDSGD', ecb:{from:'USD',to:'SGD'}},
 ];
 
-// Frankfurter.dev is the current maintained endpoint (frankfurter.app redirects but
-// may be unreliable; .dev is the actively maintained successor).
-const FX_ECB='https://api.frankfurter.dev';
+// Frankfurter.app — free ECB exchange-rate API, no key required.
+// Endpoint formats:
+//   Latest:     GET /latest?from=EUR
+//   Date range: GET /YYYY-MM-DD..YYYY-MM-DD?from=EUR   → returns rates object keyed by date
+const FX_ECB='https://api.frankfurter.app';
 let fxEcbCache={};
 
 // Return ISO date string N calendar days ago
@@ -2877,21 +2928,21 @@ function ecbCross(rates,from,to){
   return(f&&t)?t/f:null;
 }
 
-// Fetch a single ECB snapshot for a date window.
-// Uses a 5-day window ending on `endDate` so the API always returns
-// the nearest trading day even if `endDate` falls on a weekend/holiday.
+// Fetch the ECB rate snapshot nearest to `endDate`.
+// Uses a 7-day look-back window so weekends/holidays are always covered —
+// the API returns whichever trading days fall within the range; we pick the latest.
 async function fetchEcbSnapshot(endDate){
   const start=new Date(endDate);
-  start.setDate(start.getDate()-5);
+  start.setDate(start.getDate()-7);
   const startDate=start.toISOString().slice(0,10);
-  const url=`${FX_ECB}/${startDate}..${endDate}?base=EUR`;
+  const url=`${FX_ECB}/${startDate}..${endDate}?from=EUR`;
   const r=await fetch(url);
-  if(!r.ok) throw new Error(`ECB ${r.status}`);
+  if(!r.ok) throw new Error(`ECB HTTP ${r.status}`);
   const data=await r.json();
-  // data.rates is an object keyed by date; pick the latest available date
+  // data.rates is { "YYYY-MM-DD": { USD: x, CAD: y, … }, … }
   const dates=Object.keys(data.rates||{}).sort();
   if(!dates.length) return null;
-  return data.rates[dates[dates.length-1]];
+  return data.rates[dates[dates.length-1]]; // latest available date in window
 }
 
 async function fetchFxEcb(){
@@ -2907,14 +2958,14 @@ async function fetchFxEcb(){
     const pct=(a,b)=>(a!==null&&b!==null&&b!==0)?((a-b)/b*100):null;
     FX_CAT.forEach(p=>{
       const {from,to}=p.ecb;
-      const prLatest =ecbCross(latestRates, from,to);
-      const pr7      =ecbCross(rates7,      from,to);
-      const pr30     =ecbCross(rates30,      from,to);
-      const pr180    =ecbCross(rates180,     from,to);
+      const prLatest=ecbCross(latestRates, from, to);
+      const pr7     =ecbCross(rates7,      from, to);
+      const pr30    =ecbCross(rates30,     from, to);
+      const pr180   =ecbCross(rates180,    from, to);
       fxEcbCache[p.id]={
-        w1:  pct(prLatest, pr7),
-        m1:  pct(prLatest, pr30),
-        m6:  pct(prLatest, pr180),
+        w1: pct(prLatest, pr7),
+        m1: pct(prLatest, pr30),
+        m6: pct(prLatest, pr180),
       };
     });
     return true;
