@@ -1275,6 +1275,7 @@ function collectState(){
     activeFxPairs,
     activeCurrency,
     activeTab,
+    activeRange,
     idxSymbols,
     idxActiveTab,
     theme: document.body.classList.contains('light-mode')?'light':'dark',
@@ -1318,6 +1319,12 @@ async function loadStateFromFirestore(uid){
     // Restore active tab
     if(s.activeTab && ['ca','us','au','aio'].includes(s.activeTab)){
       activeTab = s.activeTab;
+    }
+
+    // Restore chart time range
+    const ALL_DATE_RANGES=['1d|1','5d|5','1w|15','1m|30','3m|60','6m|120','12m|1D','60m|1W','120m|1M','ytd|1D','all|1M'];
+    if(s.activeRange && ALL_DATE_RANGES.includes(s.activeRange)){
+      activeRange = s.activeRange;
     }
 
     // Restore indices
@@ -1444,6 +1451,27 @@ document.addEventListener('DOMContentLoaded', ()=>{
         if(wrap&&!wrap.contains(e.target)) d.classList.remove('open');
       }
     });
+  });
+
+  // Listen for TradingView Symbol Overview date-range change events.
+  // The widget posts a message when the user clicks a range button; we capture
+  // it to persist the selection so it is restored on next load.
+  window.addEventListener('message', e => {
+    try{
+      const data = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+      // TradingView Symbol Overview emits {name:'widgetReady'|'setRange', data:{range, interval}}
+      if(data && data.name === 'setRange' && data.data){
+        const {range, interval} = data.data;
+        if(range && interval){
+          const key = `${range}|${interval}`;
+          const ALL_DATE_RANGES=['1d|1','5d|5','1w|15','1m|30','3m|60','6m|120','12m|1D','60m|1W','120m|1M','ytd|1D','all|1M'];
+          if(ALL_DATE_RANGES.includes(key) && key !== activeRange){
+            activeRange = key;
+            save();
+          }
+        }
+      }
+    }catch(_){}
   });
 
   // Staging environment — bypass Firebase auth and boot directly
@@ -1619,7 +1647,10 @@ function initMarketStatus(){
 
 // Default symbol shown when user has added nothing yet
 const DEFAULT_SYM={ca:'TSX:VFV', us:'NASDAQ:NVDA', au:'ASX:GDX', aio:'NASDAQ:NVDA'};
-const DEFAULT_RANGE='5D';
+// activeRange: persisted time-range for the Symbol Overview widget (TradingView format "period|interval").
+// The widget selects whichever entry in dateRanges appears first — we reorder to put the user's
+// last-selected range at index 0 so their preference is always restored on rebuild.
+let activeRange='5d|5';
 
 // Per-country active currency for Symbol Overview widget
 const DEFAULT_CURRENCY={ca:'CAD', us:'USD', au:'AUD', aio:'USD'};
@@ -2298,10 +2329,17 @@ function buildWidget(c){
     return;
   }
 
-  // Build symbols array for Symbol Overview: each entry ["EXCHANGE:TICKER|5D|CUR"]
-  const symbolsArr=syms.map(tv=>[`${tv}|${DEFAULT_RANGE}|${cur}`]);
+  // Build symbols array for Symbol Overview: each entry ["EXCHANGE:TICKER|PERIOD|CUR"]
+  // Extract just the period part (e.g. "5d") from activeRange ("5d|5") for the symbol string
+  const rangePeriod=(activeRange.split('|')[0]||'5d').toUpperCase();
+  const symbolsArr=syms.map(tv=>[`${tv}|${rangePeriod}|${cur}`]);
 
   const isDark=!document.body.classList.contains('light-mode');
+
+  // Build dateRanges with the user's last-selected range first so TradingView
+  // initialises the widget with that range pre-selected.
+  const ALL_DATE_RANGES=['1d|1','5d|5','1w|15','1m|30','3m|60','6m|120','12m|1D','60m|1W','120m|1M','ytd|1D','all|1M'];
+  const orderedRanges=[activeRange,...ALL_DATE_RANGES.filter(r=>r!==activeRange)];
 
   const cfg={
     lineWidth: 2,
@@ -2330,7 +2368,7 @@ function buildWidget(c){
     valuesTracking: '1',
     changeMode: 'price-and-percent',
     symbols: symbolsArr,
-    dateRanges: ['1d|1','5d|5','1w|15','1m|30','3m|60','6m|120','12m|1D','60m|1W','120m|1M','ytd|1D','all|1M'],
+    dateRanges: orderedRanges,
     fontSize: '10',
     headerFontSize: 'medium',
     autosize: true,
@@ -2820,12 +2858,14 @@ const FX_CAT=[
   {id:'USDSGD', label:'USD/SGD', flags:'🇺🇸🇸🇬', tv:'FX_IDC:USDSGD', ecb:{from:'USD',to:'SGD'}},
 ];
 
-const FX_ECB='https://api.frankfurter.app';
+// Frankfurter.dev is the current maintained endpoint (frankfurter.app redirects but
+// may be unreliable; .dev is the actively maintained successor).
+const FX_ECB='https://api.frankfurter.dev';
 let fxEcbCache={};
 
+// Return ISO date string N calendar days ago
 function daysAgo(n){
   const d=new Date();
-  // Go back far enough to ensure ECB has data (skip weekends)
   d.setDate(d.getDate()-n);
   return d.toISOString().slice(0,10);
 }
@@ -2837,23 +2877,40 @@ function ecbCross(rates,from,to){
   return(f&&t)?t/f:null;
 }
 
+// Fetch a single ECB snapshot for a date window.
+// Uses a 5-day window ending on `endDate` so the API always returns
+// the nearest trading day even if `endDate` falls on a weekend/holiday.
+async function fetchEcbSnapshot(endDate){
+  const start=new Date(endDate);
+  start.setDate(start.getDate()-5);
+  const startDate=start.toISOString().slice(0,10);
+  const url=`${FX_ECB}/${startDate}..${endDate}?base=EUR`;
+  const r=await fetch(url);
+  if(!r.ok) throw new Error(`ECB ${r.status}`);
+  const data=await r.json();
+  // data.rates is an object keyed by date; pick the latest available date
+  const dates=Object.keys(data.rates||{}).sort();
+  if(!dates.length) return null;
+  return data.rates[dates[dates.length-1]];
+}
+
 async function fetchFxEcb(){
   try{
-    // Fetch 4 snapshots: latest (today), 7 days ago, 30 days ago, 180 days ago
-    const [latest, snap7, snap30, snap180]=await Promise.all([
-      fetch(`${FX_ECB}/latest?from=EUR`).then(r=>r.json()),
-      fetch(`${FX_ECB}/${daysAgo(7)}?from=EUR`).then(r=>r.json()),
-      fetch(`${FX_ECB}/${daysAgo(30)}?from=EUR`).then(r=>r.json()),
-      fetch(`${FX_ECB}/${daysAgo(183)}?from=EUR`).then(r=>r.json()),  // ~6 months
+    const today=new Date().toISOString().slice(0,10);
+    const [latestRates, rates7, rates30, rates180]=await Promise.all([
+      fetchEcbSnapshot(today),
+      fetchEcbSnapshot(daysAgo(7)),
+      fetchEcbSnapshot(daysAgo(30)),
+      fetchEcbSnapshot(daysAgo(183)),
     ]);
-    if(!latest?.rates) return false;
+    if(!latestRates) return false;
     const pct=(a,b)=>(a!==null&&b!==null&&b!==0)?((a-b)/b*100):null;
     FX_CAT.forEach(p=>{
       const {from,to}=p.ecb;
-      const prLatest =ecbCross(latest.rates, from,to);
-      const pr7      =ecbCross(snap7.rates,  from,to);
-      const pr30     =ecbCross(snap30.rates, from,to);
-      const pr180    =ecbCross(snap180.rates,from,to);
+      const prLatest =ecbCross(latestRates, from,to);
+      const pr7      =ecbCross(rates7,      from,to);
+      const pr30     =ecbCross(rates30,      from,to);
+      const pr180    =ecbCross(rates180,     from,to);
       fxEcbCache[p.id]={
         w1:  pct(prLatest, pr7),
         m1:  pct(prLatest, pr30),
